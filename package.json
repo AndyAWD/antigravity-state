@@ -1,0 +1,14 @@
+{
+  "name": "antigravity-state",
+  "version": "0.1.0",
+  "description": "Google Antigravity plugin for STATE.md long-horizon task state management.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node --test skills/agy-state/tests/state-check.test.mjs"
+  },
+  "private": true
+}

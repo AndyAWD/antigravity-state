@@ -1,14 +1,13 @@
 ---
-name: save-state
+name: agy-state
 description: Use when 使用者說「存檔」「更新狀態」「save state」，或完成一個子目標／里程碑，或使用者表示要 /clear、/compact、切換模型之前，或 Stop hook 提示 STATE.md 有進行中子目標時。用於把多步驟任務的當前狀態寫入專案根目錄的 STATE.md。純問答或單輪任務不使用。
-allowed-tools: Read, Write, Edit, Bash(git rev-parse *), Bash(git status *), Bash(date *), Bash(grep *), Bash(echo *), Bash(node *), Bash(mkdir *), Bash(mv *), Bash(rm STATE.md)
 ---
 
-# save-state
+# agy-state
 
 ## 目標
 
-把當前任務狀態寫入 `<專案根目錄>/STATE.md`，讓下一個 session（SessionStart hook 會自動注入此檔）能從「下一步」第 1 項直接接續，不重新探索專案。寫完必須通過 `state-check.mjs check` 驗證。
+把當前任務狀態寫入 `<專案根目錄>/STATE.md`，讓下一個 session（PreInvocation hook 會自動注入此檔）能從「下一步」第 1 項直接接續，不重新探索專案。寫完必須通過 `state-check.mjs check` 驗證。
 
 ## 執行步驟
 
@@ -17,8 +16,8 @@ allowed-tools: Read, Write, Edit, Bash(git rev-parse *), Bash(git status *), Bas
 3. 對照現況：`git status --porcelain` 的結果與對話中的認知不一致時，以 `git status` 為準。
 4. 讀取既有 `STATE.md`。存在則只改有變動的段落，其餘段落原字保留；不存在則依下方範本建立。
 5. 更新子目標標記：剛完成且已跑過驗證的 `[>]` 項目移到「已完成」改為 `[x]` 並附「｜驗證：」；接著要做的一項標 `[>]`；卡住的標 `[!]` 並附「｜原因：」。
-6. 執行驗證：`node ~/.claude/skills/save-state/scripts/state-check.mjs check`。有違規逐條修正後再跑，直到 exit 0。
-7. 「下一步」已無任何項目時代表目標完成：`mkdir -p ~/.claude/state-archive`，把 STATE.md 移到 `~/.claude/state-archive/<專案目錄名>-YYYYMMDD-HHmm.md`，刪除原檔，回覆「目標完成，STATE.md 已歸檔至 <路徑>」，結束。
+6. 執行驗證：`node ~/.gemini/antigravity-cli/skills/agy-state/scripts/state-check.mjs check`。有違規逐條修正後再跑，直到 exit 0。
+7. 「下一步」已無任何項目時代表目標完成：`mkdir -p ~/.gemini/state-archive`，把 STATE.md 移到 `~/.gemini/state-archive/<專案目錄名>-YYYYMMDD-HHmm.md`，刪除原檔，回覆「目標完成，STATE.md 已歸檔至 <路徑>」，結束。
 8. 首次建立且為 git repo 時，確認 `.git/info/exclude` 含 `/STATE.md`，沒有就加一行。
 9. 回覆一行：`已更新 STATE.md（變更段落：目標、下一步）驗證通過`，列出實際改動的段落名稱。使用者若表示要 /clear、/compact 或切換模型，補一句「可以執行了」。
 

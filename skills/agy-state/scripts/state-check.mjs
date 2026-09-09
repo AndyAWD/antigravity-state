@@ -5,10 +5,10 @@
  * 子指令：
  *   check [path]        驗證 STATE.md 不變量。0 通過／1 違規／無檔案時 0 並提示
  *   in-progress [path]  印出「下一步」的 [>] 項目。0 有／1 無或無檔案
- *   inject              SessionStart hook 用：印前導指示與 STATE.md 全文。恆 0
- *   stop-guard          Stop hook 用：讀 stdin JSON，有 [>] 且非 stop_hook_active 時 exit 2
+ *   inject              PreInvocation hook 用：印前導指示與 STATE.md 全文（支援 agy JSON 與 CLI 輸出）
+ *   stop-guard          Stop hook 用：讀 stdin JSON，有 [>] 且未曾續跑（executionNum <= 1）時阻止結束
  *
- * 專案根目錄解析順序：明確路徑參數 > CLAUDE_PROJECT_DIR > stdin 的 cwd（stop-guard）> 向上找 STATE.md 或 .git
+ * 專案根目錄解析順序：明確路徑參數 > AGY_PROJECT_DIR > GEMINI_PROJECT_DIR > stdin 的 workspacePaths/cwd > 向上找 STATE.md 或 .git
  * Node 18+，零依賴。
  */
 
@@ -28,13 +28,14 @@ const BULLET_RE = /^\s*[-*]\s/;
 
 export const INJECT_HEADER = [
   '=== STATE.md（專案任務狀態）===',
-  '以下為上個 session 存檔。從「下一步」第 1 項開始，不重新探索專案；使用者當前指示優先，STATE.md 與工作區現況矛盾時以現況為準並執行 /save-state 更新。標記：[>] 進行中、[ ] 待辦、[!] 受阻。',
+  '以下為上個 session 存檔。從「下一步」第 1 項開始，不重新探索專案；使用者當前指示優先，STATE.md 與工作區現況矛盾時以現況為準並執行 /agy-state 更新。標記：[>] 進行中、[ ] 待辦、[!] 受阻。',
 ].join('\n');
 
 /** 解析專案根目錄 */
 export function resolveWorkspace(customPath, fallbackCwd) {
   if (customPath) return path.resolve(customPath);
-  if (process.env.CLAUDE_PROJECT_DIR) return path.resolve(process.env.CLAUDE_PROJECT_DIR);
+  if (process.env.AGY_PROJECT_DIR) return path.resolve(process.env.AGY_PROJECT_DIR);
+  if (process.env.GEMINI_PROJECT_DIR) return path.resolve(process.env.GEMINI_PROJECT_DIR);
   let current = fallbackCwd ? path.resolve(fallbackCwd) : process.cwd();
   while (current) {
     if (fs.existsSync(path.join(current, 'STATE.md')) || fs.existsSync(path.join(current, '.git'))) return current;
@@ -178,7 +179,41 @@ export async function main(argv) {
     }
 
     case 'inject': {
-      const { exists, text } = readStateFile(resolveWorkspace(arg));
+      let payload = {};
+      try {
+        const raw = await readStdin();
+        payload = raw.trim() ? JSON.parse(raw) : {};
+      } catch {
+        payload = {};
+      }
+      const workspacePath = payload?.workspacePaths?.[0] || payload?.cwd;
+      const { exists, text } = readStateFile(resolveWorkspace(arg, workspacePath));
+      const isAgyHook = Boolean(
+        payload.conversationId ||
+        payload.workspacePaths ||
+        typeof payload.invocationNum === 'number'
+      );
+
+      if (isAgyHook) {
+        if (typeof payload.invocationNum === 'number' && payload.invocationNum > 1) {
+          process.stdout.write(JSON.stringify({ injectSteps: [] }) + '\n');
+          return 0;
+        }
+        if (!exists) {
+          process.stdout.write(JSON.stringify({ injectSteps: [] }) + '\n');
+          return 0;
+        }
+        const message = `${INJECT_HEADER}\n\n${text.endsWith('\n') ? text : `${text}\n`}`;
+        process.stdout.write(JSON.stringify({
+          injectSteps: [
+            {
+              ephemeralMessage: message,
+            },
+          ],
+        }) + '\n');
+        return 0;
+      }
+
       if (!exists) return 0;
       process.stdout.write(`${INJECT_HEADER}\n\n${text.endsWith('\n') ? text : `${text}\n`}`);
       return 0;
@@ -192,13 +227,40 @@ export async function main(argv) {
       } catch {
         payload = {};
       }
-      if (payload.stop_hook_active === true) return 0;
-      const { exists, text } = readStateFile(resolveWorkspace(arg, payload.cwd));
-      if (!exists) return 0;
-      const items = inProgressItems(text);
-      if (!items.length) return 0;
+      const isAgyHook = Boolean(
+        payload.conversationId ||
+        payload.workspacePaths ||
+        typeof payload.executionNum === 'number'
+      );
+      const workspacePath = payload?.workspacePaths?.[0] || payload?.cwd;
+      const { exists, text } = readStateFile(resolveWorkspace(arg, workspacePath));
+
+      if (isAgyHook) {
+        if (typeof payload.executionNum === 'number' && payload.executionNum > 1) {
+          process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
+          return 0;
+        }
+        if (!exists) {
+          process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
+          return 0;
+        }
+        const items = inProgressItems(text);
+        if (!items.length) {
+          process.stdout.write(JSON.stringify({ decision: 'allow' }) + '\n');
+          return 0;
+        }
+        const reason = `STATE.md 有進行中子目標：「${items[0]}」。結束前擇一處理後執行 /agy-state：已完成則移到「已完成」並附「｜驗證：」；要暫停則改回 [ ]；受阻改為 [!] 並附「｜原因：」。`;
+        process.stdout.write(JSON.stringify({
+          decision: 'continue',
+          reason,
+        }) + '\n');
+        return 0;
+      }
+
+      const items = exists ? inProgressItems(text) : [];
+      if (!exists || !items.length) return 0;
       process.stderr.write(
-        `STATE.md 有進行中子目標：「${items[0]}」。結束前擇一處理後執行 /save-state：已完成則移到「已完成」並附「｜驗證：」；要暫停則改回 [ ]；受阻改為 [!] 並附「｜原因：」。\n`,
+        `STATE.md 有進行中子目標：「${items[0]}」。結束前擇一處理後執行 /agy-state：已完成則移到「已完成」並附「｜驗證：」；要暫停則改回 [ ]；受阻改為 [!] 並附「｜原因：」。\n`,
       );
       return 2;
     }

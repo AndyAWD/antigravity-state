@@ -50,7 +50,7 @@ function run(args, { cwd, input, env } = {}) {
     cwd,
     input,
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: '', ...env },
+    env: { ...process.env, AGY_PROJECT_DIR: '', GEMINI_PROJECT_DIR: '', ...env },
   });
   return { code: r.status, out: r.stdout, err: r.stderr };
 }
@@ -171,9 +171,9 @@ test('in-progress：沒有 [>] 或無檔案時 exit 1', () => {
 
 // ---------- inject ----------
 
-test('inject：有 STATE.md 時印前導與全文', () => {
+test('inject：CLI 模式有 STATE.md 時印前導與全文', () => {
   const dir = tmpWorkspace(VALID);
-  const r = run(['inject'], { env: { CLAUDE_PROJECT_DIR: dir } });
+  const r = run(['inject'], { env: { AGY_PROJECT_DIR: dir } });
   assert.equal(r.code, 0);
   assert.match(r.out, /=== STATE\.md/);
   assert.match(r.out, /\[>\] 進行中/);
@@ -181,48 +181,110 @@ test('inject：有 STATE.md 時印前導與全文', () => {
   assert.ok(r.out.includes('issue #4412'));
 });
 
-test('inject：無 STATE.md 時無輸出，exit 0', () => {
+test('inject：CLI 模式無 STATE.md 時無輸出，exit 0', () => {
   const dir = tmpWorkspace(null);
-  const r = run(['inject'], { env: { CLAUDE_PROJECT_DIR: dir } });
+  const r = run(['inject'], { env: { AGY_PROJECT_DIR: dir } });
   assert.equal(r.code, 0);
   assert.equal(r.out, '');
 });
 
+test('inject：PreInvocation hook 傳入 agy JSON 時輸出 injectSteps 契約', () => {
+  const dir = tmpWorkspace(VALID);
+  const payload = {
+    conversationId: 'test-conv-123',
+    workspacePaths: [dir],
+    invocationNum: 1,
+  };
+  const r = run(['inject'], { input: JSON.stringify(payload) });
+  assert.equal(r.code, 0);
+  const out = JSON.parse(r.out);
+  assert.ok(Array.isArray(out.injectSteps));
+  assert.equal(out.injectSteps.length, 1);
+  assert.match(out.injectSteps[0].ephemeralMessage, /=== STATE\.md/);
+});
+
+test('inject：PreInvocation hook 非首輪（invocationNum > 1）時靜默', () => {
+  const dir = tmpWorkspace(VALID);
+  const payload = {
+    conversationId: 'test-conv-123',
+    workspacePaths: [dir],
+    invocationNum: 2,
+  };
+  const r = run(['inject'], { input: JSON.stringify(payload) });
+  assert.equal(r.code, 0);
+  const out = JSON.parse(r.out);
+  assert.deepEqual(out.injectSteps, []);
+});
+
+test('inject：PreInvocation hook 無 STATE.md 時輸出空 injectSteps', () => {
+  const dir = tmpWorkspace(null);
+  const payload = {
+    conversationId: 'test-conv-123',
+    workspacePaths: [dir],
+    invocationNum: 1,
+  };
+  const r = run(['inject'], { input: JSON.stringify(payload) });
+  assert.equal(r.code, 0);
+  const out = JSON.parse(r.out);
+  assert.deepEqual(out.injectSteps, []);
+});
+
 // ---------- stop-guard ----------
 
-test('stop-guard：有 [>] 且 stop_hook_active 為 false 時 exit 2，stderr 含項目', () => {
+test('stop-guard：Stop hook 有 [>] 且 executionNum 為 1 時回傳 continue 阻止結束', () => {
   const dir = tmpWorkspace(VALID);
-  const r = run(['stop-guard'], { env: { CLAUDE_PROJECT_DIR: dir }, input: JSON.stringify({ stop_hook_active: false, cwd: dir }) });
+  const payload = {
+    conversationId: 'test-conv-123',
+    workspacePaths: [dir],
+    executionNum: 1,
+  };
+  const r = run(['stop-guard'], { input: JSON.stringify(payload) });
+  assert.equal(r.code, 0);
+  const out = JSON.parse(r.out);
+  assert.equal(out.decision, 'continue');
+  assert.match(out.reason, /進行中子目標/);
+  assert.match(out.reason, /補跳脫雙引號測試案例/);
+  assert.match(out.reason, /\/agy-state/);
+});
+
+test('stop-guard：Stop hook 續跑時（executionNum > 1）放行，避免無窮迴圈', () => {
+  const dir = tmpWorkspace(VALID);
+  const payload = {
+    conversationId: 'test-conv-123',
+    workspacePaths: [dir],
+    executionNum: 2,
+  };
+  const r = run(['stop-guard'], { input: JSON.stringify(payload) });
+  assert.equal(r.code, 0);
+  const out = JSON.parse(r.out);
+  assert.equal(out.decision, 'allow');
+});
+
+test('stop-guard：Stop hook 沒有 [>] 或無檔案時放行', () => {
+  const noProg = tmpWorkspace(withReplaced('- [>] 補跳脫', '- [ ] 補跳脫'));
+  const r1 = run(['stop-guard'], { input: JSON.stringify({ conversationId: 'c1', workspacePaths: [noProg], executionNum: 1 }) });
+  assert.equal(r1.code, 0);
+  assert.equal(JSON.parse(r1.out).decision, 'allow');
+
+  const noFile = tmpWorkspace(null);
+  const r2 = run(['stop-guard'], { input: JSON.stringify({ conversationId: 'c2', workspacePaths: [noFile], executionNum: 1 }) });
+  assert.equal(r2.code, 0);
+  assert.equal(JSON.parse(r2.out).decision, 'allow');
+});
+
+test('stop-guard：CLI 模式有 [>] 時 exit 2，stderr 含提示', () => {
+  const dir = tmpWorkspace(VALID);
+  const r = run(['stop-guard'], { env: { AGY_PROJECT_DIR: dir }, input: '' });
   assert.equal(r.code, 2);
   assert.match(r.err, /進行中子目標/);
-  assert.match(r.err, /補跳脫雙引號測試案例/);
-  assert.match(r.err, /\/save-state/);
+  assert.match(r.err, /\/agy-state/);
 });
 
-test('stop-guard：stop_hook_active 為 true 時放行', () => {
-  const dir = tmpWorkspace(VALID);
-  const r = run(['stop-guard'], { env: { CLAUDE_PROJECT_DIR: dir }, input: JSON.stringify({ stop_hook_active: true, cwd: dir }) });
-  assert.equal(r.code, 0);
-  assert.equal(r.err, '');
-});
-
-test('stop-guard：沒有 [>] 或無檔案時放行', () => {
+test('stop-guard：CLI 模式無 [>] 或無檔案時 exit 0', () => {
   const noProg = tmpWorkspace(withReplaced('- [>] 補跳脫', '- [ ] 補跳脫'));
-  assert.equal(run(['stop-guard'], { env: { CLAUDE_PROJECT_DIR: noProg }, input: '{"stop_hook_active":false}' }).code, 0);
+  assert.equal(run(['stop-guard'], { env: { AGY_PROJECT_DIR: noProg }, input: '' }).code, 0);
   const noFile = tmpWorkspace(null);
-  assert.equal(run(['stop-guard'], { env: { CLAUDE_PROJECT_DIR: noFile }, input: '{"stop_hook_active":false}' }).code, 0);
-});
-
-test('stop-guard：stdin 非 JSON 或空白時仍能判斷', () => {
-  const dir = tmpWorkspace(VALID);
-  assert.equal(run(['stop-guard'], { env: { CLAUDE_PROJECT_DIR: dir }, input: '' }).code, 2);
-  assert.equal(run(['stop-guard'], { env: { CLAUDE_PROJECT_DIR: dir }, input: 'not json' }).code, 2);
-});
-
-test('stop-guard：無 CLAUDE_PROJECT_DIR 時改用 stdin 的 cwd', () => {
-  const dir = tmpWorkspace(VALID);
-  const r = run(['stop-guard'], { cwd: os.tmpdir(), input: JSON.stringify({ stop_hook_active: false, cwd: dir }) });
-  assert.equal(r.code, 2);
+  assert.equal(run(['stop-guard'], { env: { AGY_PROJECT_DIR: noFile }, input: '' }).code, 0);
 });
 
 // ---------- 其他 ----------

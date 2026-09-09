@@ -1,27 +1,20 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$HOME/.claude/skills/save-state/scripts/state-check.mjs\" inject",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$HOME/.claude/skills/save-state/scripts/state-check.mjs\" stop-guard",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
+    "agy-state": {
+      "PreInvocation": [
+        {
+          "type": "command",
+          "command": "node \"$HOME/.gemini/antigravity-cli/skills/agy-state/scripts/state-check.mjs\" inject",
+          "timeout": 5
+        }
+      ],
+      "Stop": [
+        {
+          "type": "command",
+          "command": "node \"$HOME/.gemini/antigravity-cli/skills/agy-state/scripts/state-check.mjs\" stop-guard",
+          "timeout": 5
+        }
+      ]
+    }
   }
 }
