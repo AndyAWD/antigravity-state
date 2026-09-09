@@ -1,0 +1,28 @@
+{
+  "description": "STATE.md 狀態管理：SessionStart 注入、Stop 把關",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/save-state/scripts/state-check.mjs\" inject",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/save-state/scripts/state-check.mjs\" stop-guard",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
